@@ -1,10 +1,4 @@
-package com.privateinternetaccess.kpi.internals
-
-import platform.CoreFoundation.CFAllocatorGetDefault
-import platform.CoreFoundation.CFUUIDCreate
-import platform.CoreFoundation.CFUUIDCreateString
-import platform.Foundation.CFBridgingRelease
-import platform.Foundation.NSUUID
+package com.privateinternetaccess.kpi.internals.util
 
 /*
  *  Copyright (c) 2021 Private Internet Access, Inc.
@@ -24,8 +18,27 @@ import platform.Foundation.NSUUID
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-internal actual object KPIIdentifier {
-    actual fun uuid(): String {
-        return NSUUID.UUID().UUIDString
+import kotlinx.coroutines.*
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
+
+
+internal actual class TestUtils {
+
+    private val executorService = Executors.newSingleThreadExecutor()
+
+    actual fun bootstrap() {
+        Dispatchers.setMain(executorService.asCoroutineDispatcher())
     }
+
+    actual fun teardown() =
+        Dispatchers.resetMain()
+
+    actual val testCoroutineContext: CoroutineContext =
+        executorService.asCoroutineDispatcher()
+
+    actual fun runBlockingTest(block: suspend CoroutineScope.() -> Unit) =
+        runBlocking(testCoroutineContext) { this.block() }
 }

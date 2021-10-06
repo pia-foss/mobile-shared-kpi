@@ -18,7 +18,6 @@ package com.privateinternetaccess.kpi.internals.model
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import com.privateinternetaccess.kpi.KPIConnectionEvent
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -32,7 +31,6 @@ import kotlinx.serialization.Serializable
  * @param eventName `String`. Type of event.
  * @param eventProperties `String`. Event properties specific to the product.
  * @param eventTime `Long`. UTC timestamp.
- * @param eventToken `String`. Token identifier for a particular product.
  */
 @Serializable
 internal data class KPIEvent(
@@ -45,44 +43,7 @@ internal data class KPIEvent(
     @SerialName("event_name")
     val eventName: String,
     @SerialName("event_properties")
-    val eventProperties: EventProperties,
+    val eventProperties: Map<String, String>,
     @SerialName("event_time")
-    val eventTime: Long,
-    @SerialName("event_token")
-    val eventToken: String
-) {
-
-    /**
-     * Data class defining the product's event properties.
-     *
-     * @param connectionSource `String`.
-     * @param data `String?` Optional.
-     * @param platform `String`.
-     * @param reason `String?` Optional.
-     * @param serverIdentifier `Int?` Optional.
-     * @param userAgent `String`.
-     * @param version `String`.
-     * @param vpnProtocol `String`.
-     */
-    @Serializable
-    data class EventProperties(
-        @SerialName("connection_source")
-        val connectionSource: String,
-        @SerialName("data")
-        val data: String? = null,
-        @SerialName("platform")
-        val platform: String,
-        @SerialName("prerelease")
-        val preRelease: Boolean,
-        @SerialName("reason")
-        val reason: String? = null,
-        @SerialName("server_identifier")
-        val serverIdentifier: String? = null,
-        @SerialName("user_agent")
-        val userAgent: String,
-        @SerialName("version")
-        val version: String,
-        @SerialName("vpn_protocol")
-        val vpnProtocol: String
-    )
-}
+    val eventTime: Long
+)

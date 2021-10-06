@@ -1,10 +1,4 @@
-package com.privateinternetaccess.kpi.internals
-
-import platform.CoreFoundation.CFAllocatorGetDefault
-import platform.CoreFoundation.CFUUIDCreate
-import platform.CoreFoundation.CFUUIDCreateString
-import platform.Foundation.CFBridgingRelease
-import platform.Foundation.NSUUID
+package com.privateinternetaccess.kpi.internals.util
 
 /*
  *  Copyright (c) 2021 Private Internet Access, Inc.
@@ -24,8 +18,34 @@ import platform.Foundation.NSUUID
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-internal actual object KPIIdentifier {
-    actual fun uuid(): String {
-        return NSUUID.UUID().UUIDString
+import com.privateinternetaccess.kpi.KPIClientStateProvider
+import com.privateinternetaccess.kpi.KPIEndpoint
+import kotlinx.coroutines.CoroutineScope
+import kotlin.coroutines.CoroutineContext
+
+
+internal expect class TestUtils() {
+    fun bootstrap()
+    fun teardown()
+    fun runBlockingTest(block: suspend CoroutineScope.()-> Unit)
+    val testCoroutineContext: CoroutineContext
+}
+
+internal class MockClientStateProvider : KPIClientStateProvider {
+
+    private var endpoints = listOf<KPIEndpoint>()
+
+    public fun setEndpoints(endpoints: List<KPIEndpoint>) {
+        this.endpoints = endpoints
     }
+
+    // region KPIClientStateProvider
+    override fun kpiEndpoints(): List<KPIEndpoint> {
+        return endpoints
+    }
+
+    override fun kpiAuthToken(): String {
+        return "test-token"
+    }
+    // endregion
 }

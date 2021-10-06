@@ -19,40 +19,26 @@ package com.privateinternetaccess.kpi.internals.utils
  */
 
 import com.privateinternetaccess.kpi.KPIClientEvent
+import com.privateinternetaccess.kpi.internals.IKPIPersistency
 import com.privateinternetaccess.kpi.internals.KPIIdentifier
-import com.privateinternetaccess.kpi.internals.KPIPersistency
 import com.privateinternetaccess.kpi.internals.model.KPIEvent
 import com.privateinternetaccess.kpi.internals.model.KPIEventIdentifier
 import kotlinx.datetime.*
+import kotlin.time.DurationUnit
 import kotlin.time.ExperimentalTime
 
-
-internal expect object KPIPlatformUtils {
-    fun platformIdentifier(): String
-}
-
-internal object KPIEventUtils {
-
-    internal fun adaptEvent(event: KPIClientEvent, appVersion: String): KPIEvent {
-        val eventProperties = KPIEvent.EventProperties(
-            event.eventProperties.connectionSource.value,
-            event.eventProperties.data,
-            KPIPlatformUtils.platformIdentifier(),
-            event.eventProperties.preRelease,
-            event.eventProperties.reason,
-            event.eventProperties.serverIdentifier,
-            event.eventProperties.userAgent,
-            appVersion,
-            event.eventProperties.vpnProtocol.value
-        )
+internal class KPIEventUtils(
+    private val kpiPersistency: IKPIPersistency
+) {
+    internal fun adaptEvent(event: KPIClientEvent): KPIEvent {
+        val eventProperties = event.eventProperties.toMutableMap()
         return KPIEvent(
-            aggregatedIdentifier(),
-            KPIIdentifier.uuid(),
-            event.eventCountry,
-            event.eventName.value,
-            eventProperties,
-            Clock.System.now().toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC).epochSeconds,
-            event.eventToken
+            aggregatedId = aggregatedIdentifier(),
+            uniqueId = KPIIdentifier.uuid(),
+            eventCountry = event.eventCountry,
+            eventName = event.eventName,
+            eventProperties = eventProperties,
+            eventTime = event.eventInstant.toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC).toEpochMilliseconds()
         )
     }
 
@@ -60,15 +46,15 @@ internal object KPIEventUtils {
     @OptIn(ExperimentalTime::class)
     private fun aggregatedIdentifier(): String {
         var identifier =
-            KPIPersistency.identifier() ?:
+            kpiPersistency.identifier() ?:
             newAggregatedIdentifier()
 
-        if ((Clock.System.now().toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC) - Instant.parse(identifier.createdAt)).inDays > 1.0) {
+        if ((Clock.System.now().toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC) - Instant.parse(identifier.createdAt)).toDouble(DurationUnit.DAYS) > 1.0) {
             identifier = newAggregatedIdentifier()
-            KPIPersistency.clearAll()
+            kpiPersistency.clearAll()
         }
 
-        KPIPersistency.persistIdentifier(identifier)
+        kpiPersistency.persistIdentifier(identifier)
         return identifier.aggregatedId
     }
 
@@ -77,5 +63,6 @@ internal object KPIEventUtils {
             KPIIdentifier.uuid(),
             Clock.System.now().toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC).toString()
         )
+
     // endregion
 }

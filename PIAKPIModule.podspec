@@ -1,6 +1,6 @@
 Pod::Spec.new do |spec|
     spec.name                     = 'PIAKPIModule'
-    spec.version                  = '1.0.0'
+    spec.version                  = '1.0.1'
     spec.homepage                 = 'https://www.privateinternetaccess.com'
     spec.source            		  = { :git => "https://github.com/pia-foss/mobile-common-kpi.git", :tag => "v#{spec.version}" }
     spec.authors                  = { "Jose Blaya" => "jose@privateinternetaccess.com", "Juan Docal" => "juan@privateinternetaccess.com" }

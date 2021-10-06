@@ -1,3 +1,5 @@
+@file:Suppress("DeferredResultUnused")
+
 package com.privateinternetaccess.kpi.internals
 
 /*
@@ -20,38 +22,61 @@ package com.privateinternetaccess.kpi.internals
 
 import com.privateinternetaccess.kpi.*
 import com.privateinternetaccess.kpi.internals.model.KPIEvent
-import com.privateinternetaccess.kpi.internals.model.KPIEventIdentifier
-import com.privateinternetaccess.kpi.internals.model.request.KPIEventsRequest
+import com.privateinternetaccess.kpi.internals.utils.*
 import com.privateinternetaccess.kpi.internals.utils.KPIEventUtils
-import com.privateinternetaccess.kpi.internals.utils.KPIUtils
+import com.privateinternetaccess.kpi.internals.utils.KPIPlatformUtils
+import com.privateinternetaccess.kpi.testing.TestingKpi
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.withContext
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.CoroutineContext
-import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
 
 
 internal expect object KPIHttpClient {
-    fun client(certificate: String? = null, pinnedEndpoint: Pair<String, String>? = null): HttpClient
+    fun client(
+        kpiHttpLogLevel: KPIHttpLogLevel = KPIHttpLogLevel.NONE,
+        userAgent: String? = null,
+        certificate: String? = null,
+        pinnedEndpoint: Pair<String, String>? = null,
+        requestTimeoutMs: Long
+    ): HttpClient
 }
 
-internal expect object KPIPersistency {
-    fun persistIdentifier(identifier: KPIEventIdentifier)
-    fun identifier(): KPIEventIdentifier?
-    fun persistEvent(event: KPIEvent)
-    fun events(): List<KPIEvent>
-    fun sampleEvents(): List<KPIEvent>
-    fun clearBatchedEvents()
-    fun clearAll()
+expect class KPIPlatformProvider internal constructor() {
+
+    internal val defaultPreferenceName: String
+
+    internal val userAgent: String?
+
+    internal val kpiPreferences: KPIPreferences?
+
+    internal val kpiLogger: KPILogger
+
+    internal val kpiHttpLogLevel: KPIHttpLogLevel
+
+    internal fun preference(name: String): Boolean
+
+    internal fun userAgent(userAgent: String?): Boolean
+
+    internal fun loggingEnabled(enabled: Boolean)
+
+    internal fun kpiLogLevel(logLevel: KPIHttpLogLevel): Boolean
+}
+
+internal expect class KPIPreferences(
+    provider: KPIPlatformProvider,
+    context: Any?,
+    name: String
+) {
+    val isValid: Boolean
+
+    fun getString(key: String, default: String? = null): String?
+    fun putString(key: String, value: String)
+    fun remove(key: String)
+    fun clear()
 }
 
 internal expect object KPIIdentifier {
@@ -59,26 +84,38 @@ internal expect object KPIIdentifier {
 }
 
 internal class KPI(
+    private val kpiProvider: KPIPlatformProvider,
     private val kpiClientStateProvider: KPIClientStateProvider,
     private val kpiSendEventMode: KPISendEventsMode,
     private val certificate: String?,
-    private val appVersion: String,
+    private val format: KPIRequestFormat,
+    private val eventTimeRoundGranularity: KTimeUnit,
+    private val eventTimeSendGranularity: KTimeUnit,
+    private val eventsBatchSize: Int,
+    private val eventsHistorySize: Int,
+    private val requestTimeoutMs: Long
 ) : CoroutineScope, KPIAPI {
-
     companion object {
-        private const val EVENTS_BATCH_SIZE = 20
-        internal const val EVENTS_HISTORY_SIZE = 50
-        internal const val REQUEST_TIMEOUT_MS = 3000L
+        private val TAG: String = KPI::class.simpleName!!
+
         internal const val AGGREGATED_ID_PERSISTENCY_KEY = "AGGREGATED_ID_PERSISTENCY_KEY"
         internal const val EVENTS_BATCH_PERSISTENCY_KEY = "EVENTS_BATCH_PERSISTENCY_KEY"
         internal const val EVENTS_SAMPLE_PERSISTENCY_KEY = "EVENTS_SAMPLE_PERSISTENCY_KEY"
-        internal val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
+
+        internal val json = Json {
+            // do not fail, if json objects with unknown key names are being deserialized
+            ignoreUnknownKeys = true
+
+            // default values of Kotlin are encoded
+            encodeDefaults = true
+        }
     }
 
-    private enum class Endpoint(val url: String) {
-        KPI("/api/client/v2/service-quality")
-    }
+    internal var batchedEvents = mutableListOf<KPIEvent>()
+    internal var sampleEvents = mutableListOf<KPIEvent>()
 
+    private val kpiPersistency: IKPIPersistency = KPIPersistencyImpl(kpiProvider)
+    private val kpiEventUtils: KPIEventUtils = KPIEventUtils(kpiPersistency)
     private var started = false
 
     // region CoroutineScope
@@ -87,45 +124,74 @@ internal class KPI(
     // endregion
 
     // region KPIAPI
+    override val testingKpi: TestingKpi = TestingKpi(
+        kpiClientStateProvider = kpiClientStateProvider,
+        kpiEventUtils = kpiEventUtils,
+        eventTimeRoundGranularity = eventTimeRoundGranularity,
+        eventTimeSendGranularity = eventTimeSendGranularity,
+    )
+
     override fun start() {
-        startAsync()
+        launch {
+            startAsync()
+        }
     }
 
-    override fun stop() {
-        stopAsync()
+    override fun stop(callback: (error: KPIError?) -> Unit) {
+        launch {
+            stopAsync(callback)
+        }
     }
 
     override fun submit(event: KPIClientEvent, callback: (error: KPIError?) -> Unit) {
-        submitAsync(event, kpiClientStateProvider.kpiEndpoints(), callback)
+        launch {
+            submitAsync(event, kpiClientStateProvider.kpiEndpoints(), callback)
+        }
     }
 
     override fun flush(callback: (error: KPIError?) -> Unit) {
-        flushAsync(kpiClientStateProvider.kpiEndpoints(), KPIPersistency.events(), callback)
+        launch {
+            flushAsync(kpiClientStateProvider.kpiEndpoints(), callback)
+        }
     }
 
     override fun recentEvents(callback: (events: List<String>) -> Unit) {
-        recentEventsAsync(callback)
+        launch {
+            recentEventsAsync(callback)
+        }
     }
     // endregion
 
     // region private
-    private fun startAsync() = async {
+    private fun startAsync() {
+        batchedEvents = kpiPersistency.events().toMutableList()
+        sampleEvents = kpiPersistency.sampleEvents().toMutableList()
         started = true
     }
 
-    private fun stopAsync() = async {
-        KPIPersistency.clearAll()
-        started = false
+    private fun stopAsync(callback: (error: KPIError?) -> Unit) {
+        var error: KPIError? = null
+        try {
+            batchedEvents = mutableListOf()
+            sampleEvents = mutableListOf()
+            kpiPersistency.clearAll()
+            started = false
+        } catch (t: Throwable) {
+            val stacktrace = t.stackTraceToString()
+            kpiProvider.kpiLogger.logError(tag = TAG, message = stacktrace)
+            error = KPIError(description = stacktrace)
+        }
+        callback(error)
     }
 
-    private fun submitAsync(
+    private suspend fun submitAsync(
         event: KPIClientEvent,
         endpoints: List<KPIEndpoint>,
         callback: (error: KPIError?) -> Unit
-    ) = async {
+    ) {
         var error: KPIError? = null
-        if (endpoints.isNullOrEmpty()) {
-            error= KPIError("No available endpoints to perform the request.")
+        if (endpoints.isEmpty()) {
+            error = KPIError("No available endpoints to perform the request.")
         }
 
         if (!started) {
@@ -133,30 +199,32 @@ internal class KPI(
         }
 
         if (error == null) {
-            // Persist all events. In case of request failure, they'll be re-submitted the next time we flush events.
-            KPIPersistency.persistEvent(KPIEventUtils.adaptEvent(event, appVersion))
+            try {
+                // Queue in memory and persist events
+                persistAndQueueEvent(kpiEventUtils.adaptEvent(event))
 
-            // Evaluate whether it's time to flush events according to the set mode.
-            val shouldSendEvents = when (kpiSendEventMode) {
-                KPISendEventsMode.PER_EVENT -> true
-                KPISendEventsMode.PER_BATCH -> KPIPersistency.events().size >= EVENTS_BATCH_SIZE
-            }
-
-            // If we need to flush events. Get those that fulfill the set mode.
-            if (shouldSendEvents) {
-                val events = when (kpiSendEventMode) {
-                    KPISendEventsMode.PER_EVENT,
-                    KPISendEventsMode.PER_BATCH -> KPIPersistency.events()
+                // Evaluate whether it's time to flush events according to the set mode.
+                val shouldSendEvents = when (kpiSendEventMode) {
+                    KPISendEventsMode.PER_EVENT -> true
+                    KPISendEventsMode.PER_BATCH -> batchedEvents.size >= eventsBatchSize
                 }
-                error = sendEvents(endpoints, events)
 
-                // If there were no errors sending events. Clear them according to the set mode.
-                if (error == null) {
-                    when (kpiSendEventMode) {
-                        KPISendEventsMode.PER_EVENT,
-                        KPISendEventsMode.PER_BATCH -> KPIPersistency.clearBatchedEvents()
+                // If we need to flush events. Get those that fulfill the set mode.
+                if (shouldSendEvents) {
+                    error = sendEvents(endpoints)
+
+                    // If there were no errors sending events. Clear them according to the set mode.
+                    if (error == null) {
+                        when (kpiSendEventMode) {
+                            KPISendEventsMode.PER_EVENT,
+                            KPISendEventsMode.PER_BATCH -> clearPersistedAndQueuedEvents()
+                        }
                     }
                 }
+            } catch (t: Throwable) {
+                val stacktrace = t.stackTraceToString()
+                kpiProvider.kpiLogger.logDebug(tag = TAG, message = stacktrace)
+                error = KPIError(description = stacktrace)
             }
         }
 
@@ -165,16 +233,21 @@ internal class KPI(
         }
     }
 
-    private fun flushAsync(
+    private suspend fun flushAsync(
         endpoints: List<KPIEndpoint>,
-        events: List<KPIEvent>,
         callback: (error: KPIError?) -> Unit
-    ) = async {
-        val error = sendEvents(endpoints, events)
+    ) {
+        var error = sendEvents(endpoints)
 
         // If there were no errors flushing events. Clear them.
         if (error == null) {
-            KPIPersistency.clearBatchedEvents()
+            try {
+                clearPersistedAndQueuedEvents()
+            } catch (t: Throwable) {
+                val stacktrace = t.stackTraceToString()
+                kpiProvider.kpiLogger.logDebug(tag = TAG, message = stacktrace)
+                error = KPIError(description = stacktrace)
+            }
         }
 
         withContext(Dispatchers.Main) {
@@ -183,12 +256,11 @@ internal class KPI(
     }
 
     private suspend fun sendEvents(
-        endpoints: List<KPIEndpoint>,
-        events: List<KPIEvent>,
+        endpoints: List<KPIEndpoint>
     ): KPIError? {
         var error: KPIError? = null
-        if (endpoints.isNullOrEmpty()) {
-            error= KPIError("No available endpoints to perform the request.")
+        if (endpoints.isEmpty()) {
+            error = KPIError("No available endpoints to perform the request.")
         }
 
         if (!started) {
@@ -196,6 +268,17 @@ internal class KPI(
         }
 
         if (error == null) {
+
+            // Get those events that fulfill the set mode.
+            val events = when (kpiSendEventMode) {
+                KPISendEventsMode.PER_EVENT,
+                KPISendEventsMode.PER_BATCH -> {
+                    val eventsToBeSent = batchedEvents
+                    batchedEvents = mutableListOf()
+                    eventsToBeSent
+                }
+            }
+
             for (endpoint in endpoints) {
                 if (endpoint.usePinnedCertificate && certificate.isNullOrEmpty()) {
                     error = KPIError("No available certificate for pinning purposes")
@@ -204,15 +287,45 @@ internal class KPI(
 
                 error = null
                 val client = if (endpoint.usePinnedCertificate) {
-                    KPIHttpClient.client(certificate, Pair(endpoint.endpoint, endpoint.certificateCommonName!!))
+                    KPIHttpClient.client(
+                        kpiHttpLogLevel = kpiProvider.kpiHttpLogLevel,
+                        userAgent = kpiProvider.userAgent,
+                        certificate = certificate,
+                        pinnedEndpoint = Pair(endpoint.endpoint, endpoint.certificateCommonName!!),
+                        requestTimeoutMs = requestTimeoutMs
+                    )
                 } else {
-                    KPIHttpClient.client()
+                    KPIHttpClient.client(
+                        kpiHttpLogLevel = kpiProvider.kpiHttpLogLevel,
+                        userAgent = kpiProvider.userAgent,
+                        requestTimeoutMs = requestTimeoutMs
+                    )
                 }
-                val response = client.postCatching<Pair<HttpResponse?, Exception?>> {
-                    url("https://${endpoint.endpoint}${Endpoint.KPI.url}")
-                    header("Authorization", "Token ${kpiClientStateProvider.kpiAuthToken()}")
-                    contentType(ContentType.Application.Json)
-                    body = json.encodeToString(KPIEventsRequest.serializer(), KPIEventsRequest(events))
+                val projectToken = kpiClientStateProvider.projectToken()
+                if (format == KPIRequestFormat.ELASTIC && projectToken == null) {
+                    return KPIError("project token must not be null")
+                }
+                val response: Pair<HttpResponse?, Throwable?> = when (format) {
+                    KPIRequestFormat.KAPE -> client.postCatching {
+                        url("https://${endpoint.endpoint}")
+                        header("Authorization", "Token ${kpiClientStateProvider.kpiAuthToken()}")
+                        contentType(ContentType.Application.Json)
+                        body = KPIPlatformUtils.encodeWithKapeFormat(
+                            events = events,
+                            eventTimeRoundGranularity = eventTimeRoundGranularity,
+                            eventTimeSendGranularity = eventTimeSendGranularity
+                        )
+                    }
+                    KPIRequestFormat.ELASTIC -> client.postCatching {
+                        url("https://${endpoint.endpoint}")
+                        contentType(ContentType.Application.FormUrlEncoded)
+                        body = KPIPlatformUtils.encodeWithElasticFormat(
+                            events = events,
+                            projectToken = projectToken!!,
+                            eventRoundTimeGranularity = eventTimeRoundGranularity,
+                            eventSendTimeGranularity = eventTimeSendGranularity
+                        )
+                    }
                 }
 
                 response.first?.let {
@@ -230,21 +343,26 @@ internal class KPI(
                     break
                 }
             }
+
+            // If we failed to submit events. Add them back to the queue.
+            if (error != null) {
+                batchedEvents.addAll(events)
+            }
         }
         return error
     }
 
-    private fun recentEventsAsync(callback: (events: List<String>) -> Unit) = async {
+    private suspend fun recentEventsAsync(callback: (events: List<String>) -> Unit) {
         val result = mutableListOf<String>()
-        for (event in KPIPersistency.sampleEvents()) {
+        for (event in sampleEvents) {
             result.add("" +
                     "EventName: ${event.eventName} " +
-                    "EventToken: ${event.eventToken} " +
-                    "EventProperties.Platform: ${event.eventProperties.platform} " +
-                    "EventProperties.UserAgent: ${event.eventProperties.userAgent} " +
-                    "EventProperties.Version: ${event.eventProperties.version} " +
-                    "EventProperties.VpnProtocol: ${event.eventProperties.vpnProtocol} " +
-                    "EventProperties.ConnectionSource: ${event.eventProperties.connectionSource} " +
+                    "EventToken: ${kpiClientStateProvider.projectToken()} " +
+                    "EventProperties.Platform: ${event.eventProperties["platform"]} " +
+                    "EventProperties.UserAgent: ${event.eventProperties["user_agent"]} " +
+                    "EventProperties.Version: ${event.eventProperties["version"]} " +
+                    "EventProperties.VpnProtocol: ${event.eventProperties["vpn_protocol"]} " +
+                    "EventProperties.ConnectionSource: ${event.eventProperties["connection_source"]} " +
                     "")
         }
 
@@ -253,20 +371,45 @@ internal class KPI(
         }
     }
 
-    private suspend inline fun <reified T> HttpClient.postCatching(
+    private fun persistAndQueueEvent(event: KPIEvent) {
+        // Persist all events. In case of request failure, they'll be re-submitted the next time we flush events.
+        kpiPersistency.persistEvent(event, eventsHistorySize)
+
+        // Update batched events. The batching size is to indicate when to trigger the request,
+        // not max numbers of events to batch. Thus, add all events to its queue.
+        batchedEvents.add(event)
+
+        // Update sample events. If we have more than the max of sample events supported.
+        // Clear the oldest one before adding the new one.
+        if (sampleEvents.size >= eventsHistorySize) {
+            sampleEvents.removeFirst()
+        }
+        sampleEvents.add(event)
+    }
+
+    private fun clearPersistedAndQueuedEvents() {
+        // Clear only batched events. We keep a max of historical events `EVENTS_HISTORY_SIZE` to display to the user.
+        kpiPersistency.clearBatchedEvents()
+
+        // Update in-memory queue
+        batchedEvents = mutableListOf()
+    }
+
+    private suspend inline fun HttpClient.postCatching(
         block: HttpRequestBuilder.() -> Unit = {}
-    ): Pair<HttpResponse?, Exception?> = request {
-        var exception: Exception? = null
+    ): Pair<HttpResponse?, Throwable?> = request {
+        var throwable: Throwable? = null
         var response: HttpResponse? = null
         try {
             response = request {
                 method = HttpMethod.Post
                 apply(block)
             }
-        } catch (e: Exception) {
-            exception = e
+        } catch (t: Throwable) {
+            throwable = t
         }
-        return Pair(response, exception)
+        return Pair(response, throwable)
     }
+
     // endregion
 }
