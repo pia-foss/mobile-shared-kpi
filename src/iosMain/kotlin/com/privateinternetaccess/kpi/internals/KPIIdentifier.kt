@@ -23,8 +23,9 @@ import platform.Foundation.NSUUID
  *  You should have received a copy of the GNU General Public License along with the Private
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
-
+ 
 internal actual object KPIIdentifier {
+
     actual fun uuid(): String {
         return NSUUID.UUID().UUIDString
     }

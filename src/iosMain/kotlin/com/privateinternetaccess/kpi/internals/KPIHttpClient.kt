@@ -18,12 +18,10 @@ package com.privateinternetaccess.kpi.internals
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import com.privateinternetaccess.kpi.KPIHttpLogLevel
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.ios.Ios
+import io.ktor.client.features.HttpTimeout
 import io.ktor.client.engine.ios.*
-import io.ktor.client.features.*
-import io.ktor.client.features.logging.*
 import kotlinx.cinterop.*
 import platform.CoreFoundation.*
 import platform.Foundation.*
@@ -31,34 +29,10 @@ import platform.Security.*
 
 
 internal actual object KPIHttpClient {
-    actual fun client(
-        kpiHttpLogLevel: KPIHttpLogLevel,
-        userAgent: String?,
-        certificate: String?,
-        pinnedEndpoint: Pair<String, String>?,
-        requestTimeoutMs: Long
-    ) = HttpClient(Ios) {
+    actual fun client(certificate: String?, pinnedEndpoint: Pair<String, String>?) = HttpClient(Ios) {
         expectSuccess = false
         install(HttpTimeout) {
-            requestTimeoutMillis = requestTimeoutMs
-        }
-        if (userAgent.isNullOrBlank().not()) {
-            install(UserAgent) {
-                agent = userAgent?.trim() ?: ""
-            }
-        }
-
-        if (kpiHttpLogLevel != KPIHttpLogLevel.NONE) {
-            install(Logging) {
-                logger = Logger.DEFAULT
-                level = when(kpiHttpLogLevel) {
-                    KPIHttpLogLevel.ALL -> LogLevel.ALL
-                    KPIHttpLogLevel.HEADERS -> LogLevel.HEADERS
-                    KPIHttpLogLevel.BODY -> LogLevel.BODY
-                    KPIHttpLogLevel.INFO -> LogLevel.INFO
-                    else -> LogLevel.NONE
-                }
-            }
+            requestTimeoutMillis = KPI.REQUEST_TIMEOUT_MS
         }
         if (certificate != null && pinnedEndpoint != null) {
             engine {

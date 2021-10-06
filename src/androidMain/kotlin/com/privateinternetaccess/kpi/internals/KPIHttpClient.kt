@@ -18,7 +18,6 @@ package com.privateinternetaccess.kpi.internals
  *  Internet Access Mobile Client.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import com.privateinternetaccess.kpi.KPIHttpLogLevel
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.features.*
@@ -35,45 +34,20 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 import javax.security.auth.x500.X500Principal
-import io.ktor.client.features.logging.*
 
 
 internal actual object KPIHttpClient {
-    actual fun client(
-        kpiHttpLogLevel: KPIHttpLogLevel,
-        userAgent: String?,
-        certificate: String?,
-        pinnedEndpoint: Pair<String, String>?,
-        requestTimeoutMs: Long
-    ) = HttpClient(OkHttp) {
+    actual fun client(certificate: String?, pinnedEndpoint: Pair<String, String>?) = HttpClient(OkHttp) {
         expectSuccess = false
         install(HttpTimeout) {
-            requestTimeoutMillis = requestTimeoutMs
-        }
-        if (userAgent.isNullOrBlank().not()) {
-            install(UserAgent) {
-                agent = userAgent?.trim() ?: ""
-            }
-        }
-        if (kpiHttpLogLevel != KPIHttpLogLevel.NONE) {
-            install(Logging) {
-                logger = Logger.DEFAULT
-                level = when(kpiHttpLogLevel) {
-                    KPIHttpLogLevel.ALL -> LogLevel.ALL
-                    KPIHttpLogLevel.HEADERS -> LogLevel.HEADERS
-                    KPIHttpLogLevel.BODY -> LogLevel.BODY
-                    KPIHttpLogLevel.INFO -> LogLevel.INFO
-                    else -> LogLevel.NONE
-                }
-            }
+            requestTimeoutMillis = KPI.REQUEST_TIMEOUT_MS
         }
         if (certificate != null && pinnedEndpoint != null) {
             engine {
                 preconfigured = KPICertificatePinner.getOkHttpClient(
                     certificate,
                     pinnedEndpoint.first,
-                    pinnedEndpoint.second,
-                    requestTimeoutMs
+                    pinnedEndpoint.second
                 )
             }
         }
@@ -83,7 +57,7 @@ internal actual object KPIHttpClient {
 private class KPICertificatePinner {
 
     companion object {
-        fun getOkHttpClient(certificate: String, requestHostname: String, commonName: String, requestTimeoutMs: Long): OkHttpClient {
+        fun getOkHttpClient(certificate: String, requestHostname: String, commonName: String): OkHttpClient {
             var trustManager: X509TrustManager? = null
             var sslSocketFactory: SSLSocketFactory? = null
             val builder = OkHttpClient.Builder()
@@ -117,7 +91,7 @@ private class KPICertificatePinner {
             } catch (e: KeyManagementException) {
                 e.printStackTrace()
             }
-            builder.connectTimeout(requestTimeoutMs, TimeUnit.MILLISECONDS)
+            builder.connectTimeout(KPI.REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
 
             if (trustManager != null && sslSocketFactory != null) {
                 builder.sslSocketFactory(sslSocketFactory, trustManager)
