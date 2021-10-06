@@ -1,0 +1,94 @@
+buildscript {
+    repositories {
+    }
+    dependencies {
+    }
+}
+
+plugins {
+    id "org.jetbrains.kotlin.multiplatform" version "1.5.31"
+    id "org.jetbrains.kotlin.plugin.serialization" version "1.5.31"
+    id "org.jetbrains.kotlin.native.cocoapods" version "1.5.31"
+    id "com.android.library"
+}
+
+repositories {
+    gradlePluginPortal()
+    google()
+    mavenCentral()
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlinx-serialization'
+
+android {
+    compileSdkVersion 31
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 31
+    }
+    buildTypes {
+        'release' {
+            minifyEnabled false
+        }
+    }
+}
+
+kotlin {
+    version = "1.0.1"
+    cocoapods {
+        summary = "PIAKPI Module"
+        homepage = "https://www.privateinternetaccess.com"
+        frameworkName = "PIAKPI"
+    }
+
+    targets.withType(org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget) {
+        binaries.withType(org.jetbrains.kotlin.gradle.plugin.mpp.Framework) {
+            isStatic = false
+        }
+    }
+
+    targets {
+        final def iOSPreset = System.getenv('SDK_NAME')?.startsWith("iphoneos") ? presets.iosArm64 : presets.iosX64
+        fromPreset(iOSPreset, "ios") {
+            binaries {
+                framework("PIAKPI")
+            }
+        }
+        fromPreset(presets.android, "android")
+    }
+
+    sourceSets {
+        commonMain.dependencies {
+            implementation "io.ktor:ktor-client-core:$ktor_version"
+            implementation "io.ktor:ktor-client-logging:$ktor_version"
+            implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutines_version"
+            implementation "org.jetbrains.kotlinx:kotlinx-serialization-core:$serialization_version"
+            implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:$serialization_version"
+            implementation "org.jetbrains.kotlinx:kotlinx-datetime:$datetime_version"
+            implementation "ch.qos.logback:logback-classic:$logback_version"
+
+            // logging library
+            implementation "io.github.aakira:napier:$napier_version"
+        }
+        commonTest.dependencies {
+            implementation kotlin("test")
+            implementation kotlin("test-junit")
+            implementation kotlin("test-common")
+            implementation kotlin("test-annotations-common")
+        }
+        androidMain.dependencies {
+            implementation "com.madgag.spongycastle:core:1.54.0.0"
+            implementation "io.ktor:ktor-client-okhttp:$ktor_version"
+        }
+        androidTest.dependencies {
+            implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutines_version"
+            implementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$coroutines_version"
+        }
+        iosMain.dependencies {
+            implementation "io.ktor:ktor-client-ios:$ktor_version"
+        }
+        iosTest.dependencies {
+        }
+    }
+}
