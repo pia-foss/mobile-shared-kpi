@@ -45,13 +45,15 @@ internal object KPIEventUtils {
             appVersion,
             event.eventProperties.vpnProtocol.value
         )
+        val datetime = Clock.System.now().toLocalDateTime(TimeZone.UTC)
+        val reducedDatetime = LocalDateTime(datetime.year, datetime.month, datetime.dayOfMonth, datetime.hour, 0, 0, 0)
         return KPIEvent(
             aggregatedIdentifier(),
             KPIIdentifier.uuid(),
             event.eventCountry,
             event.eventName.value,
             eventProperties,
-            Clock.System.now().toLocalDateTime(TimeZone.UTC).toInstant(TimeZone.UTC).epochSeconds,
+            reducedDatetime.toInstant(TimeZone.UTC).epochSeconds,
             event.eventToken
         )
     }

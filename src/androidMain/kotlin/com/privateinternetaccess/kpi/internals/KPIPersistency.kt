@@ -70,7 +70,7 @@ internal actual object KPIPersistency {
 
         // Update sample events.
         val recentEvents = sampleEvents().toMutableList()
-        if (recentEvents.size > KPI.EVENTS_HISTORY_SIZE) {
+        if (recentEvents.size >= KPI.EVENTS_HISTORY_SIZE) {
             recentEvents.removeFirst()
         }
         recentEvents.add(event)

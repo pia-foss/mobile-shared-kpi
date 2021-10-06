@@ -28,16 +28,9 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.withContext
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import kotlin.coroutines.CoroutineContext
-import kotlin.time.Duration
-import kotlin.time.ExperimentalTime
 
 
 internal expect object KPIHttpClient {
@@ -79,6 +72,8 @@ internal class KPI(
         KPI("/api/client/v2/service-quality")
     }
 
+    internal var batchedEvents = mutableListOf<KPIEvent>()
+    internal var sampleEvents = mutableListOf<KPIEvent>()
     private var started = false
 
     // region CoroutineScope
@@ -88,41 +83,55 @@ internal class KPI(
 
     // region KPIAPI
     override fun start() {
-        startAsync()
+        launch {
+            startAsync()
+        }
     }
 
     override fun stop() {
-        stopAsync()
+        launch {
+            stopAsync()
+        }
     }
 
     override fun submit(event: KPIClientEvent, callback: (error: KPIError?) -> Unit) {
-        submitAsync(event, kpiClientStateProvider.kpiEndpoints(), callback)
+        launch {
+            submitAsync(event, kpiClientStateProvider.kpiEndpoints(), callback)
+        }
     }
 
     override fun flush(callback: (error: KPIError?) -> Unit) {
-        flushAsync(kpiClientStateProvider.kpiEndpoints(), KPIPersistency.events(), callback)
+        launch {
+            flushAsync(kpiClientStateProvider.kpiEndpoints(), callback)
+        }
     }
 
     override fun recentEvents(callback: (events: List<String>) -> Unit) {
-        recentEventsAsync(callback)
+        launch {
+            recentEventsAsync(callback)
+        }
     }
     // endregion
 
     // region private
-    private fun startAsync() = async {
+    private fun startAsync() {
+        batchedEvents = KPIPersistency.events().toMutableList()
+        sampleEvents = KPIPersistency.sampleEvents().toMutableList()
         started = true
     }
 
-    private fun stopAsync() = async {
+    private fun stopAsync() {
+        batchedEvents = mutableListOf()
+        sampleEvents = mutableListOf()
         KPIPersistency.clearAll()
         started = false
     }
 
-    private fun submitAsync(
+    private suspend fun submitAsync(
         event: KPIClientEvent,
         endpoints: List<KPIEndpoint>,
         callback: (error: KPIError?) -> Unit
-    ) = async {
+    ) {
         var error: KPIError? = null
         if (endpoints.isNullOrEmpty()) {
             error= KPIError("No available endpoints to perform the request.")
@@ -133,28 +142,23 @@ internal class KPI(
         }
 
         if (error == null) {
-            // Persist all events. In case of request failure, they'll be re-submitted the next time we flush events.
-            KPIPersistency.persistEvent(KPIEventUtils.adaptEvent(event, appVersion))
+            // Queue in memory and persist events
+            persistAndQueueEvent(KPIEventUtils.adaptEvent(event, appVersion))
 
             // Evaluate whether it's time to flush events according to the set mode.
             val shouldSendEvents = when (kpiSendEventMode) {
                 KPISendEventsMode.PER_EVENT -> true
-                KPISendEventsMode.PER_BATCH -> KPIPersistency.events().size >= EVENTS_BATCH_SIZE
+                KPISendEventsMode.PER_BATCH -> batchedEvents.size >= EVENTS_BATCH_SIZE
             }
 
-            // If we need to flush events. Get those that fulfill the set mode.
             if (shouldSendEvents) {
-                val events = when (kpiSendEventMode) {
-                    KPISendEventsMode.PER_EVENT,
-                    KPISendEventsMode.PER_BATCH -> KPIPersistency.events()
-                }
-                error = sendEvents(endpoints, events)
+                error = sendEvents(endpoints)
 
                 // If there were no errors sending events. Clear them according to the set mode.
                 if (error == null) {
                     when (kpiSendEventMode) {
                         KPISendEventsMode.PER_EVENT,
-                        KPISendEventsMode.PER_BATCH -> KPIPersistency.clearBatchedEvents()
+                        KPISendEventsMode.PER_BATCH -> clearPersistedAndQueuedEvents()
                     }
                 }
             }
@@ -165,16 +169,15 @@ internal class KPI(
         }
     }
 
-    private fun flushAsync(
+    private suspend fun flushAsync(
         endpoints: List<KPIEndpoint>,
-        events: List<KPIEvent>,
         callback: (error: KPIError?) -> Unit
-    ) = async {
-        val error = sendEvents(endpoints, events)
+    ) {
+        val error = sendEvents(endpoints)
 
         // If there were no errors flushing events. Clear them.
         if (error == null) {
-            KPIPersistency.clearBatchedEvents()
+            clearPersistedAndQueuedEvents()
         }
 
         withContext(Dispatchers.Main) {
@@ -183,8 +186,7 @@ internal class KPI(
     }
 
     private suspend fun sendEvents(
-        endpoints: List<KPIEndpoint>,
-        events: List<KPIEvent>,
+        endpoints: List<KPIEndpoint>
     ): KPIError? {
         var error: KPIError? = null
         if (endpoints.isNullOrEmpty()) {
@@ -196,6 +198,17 @@ internal class KPI(
         }
 
         if (error == null) {
+
+            // Get those events that fulfill the set mode.
+            val events = when (kpiSendEventMode) {
+                KPISendEventsMode.PER_EVENT,
+                KPISendEventsMode.PER_BATCH -> {
+                    val eventsToBeSent = batchedEvents
+                    batchedEvents = mutableListOf()
+                    eventsToBeSent
+                }
+            }
+
             for (endpoint in endpoints) {
                 if (endpoint.usePinnedCertificate && certificate.isNullOrEmpty()) {
                     error = KPIError("No available certificate for pinning purposes")
@@ -230,13 +243,18 @@ internal class KPI(
                     break
                 }
             }
+
+            // If we failed to submit events. Add them back to the queue.
+            if (error != null) {
+                batchedEvents.addAll(events)
+            }
         }
         return error
     }
 
-    private fun recentEventsAsync(callback: (events: List<String>) -> Unit) = async {
+    private suspend fun recentEventsAsync(callback: (events: List<String>) -> Unit) {
         val result = mutableListOf<String>()
-        for (event in KPIPersistency.sampleEvents()) {
+        for (event in sampleEvents) {
             result.add("" +
                     "EventName: ${event.eventName} " +
                     "EventToken: ${event.eventToken} " +
@@ -251,6 +269,30 @@ internal class KPI(
         withContext(Dispatchers.Main) {
             callback(result)
         }
+    }
+
+    private fun persistAndQueueEvent(event: KPIEvent) {
+        // Persist all events. In case of request failure, they'll be re-submitted the next time we flush events.
+        KPIPersistency.persistEvent(event)
+
+        // Update batched events. The batching size is to indicate when to trigger the request,
+        // not max numbers of events to batch. Thus, add all events to its queue.
+        batchedEvents.add(event)
+
+        // Update sample events. If we have more than the max of sample events supported.
+        // Clear the oldest one before adding the new one.
+        if (sampleEvents.size >= EVENTS_HISTORY_SIZE) {
+            sampleEvents.removeFirst()
+        }
+        sampleEvents.add(event)
+    }
+
+    private fun clearPersistedAndQueuedEvents() {
+        // Clear only batched events. We keep a max of historical events `EVENTS_HISTORY_SIZE` to display to the user.
+        KPIPersistency.clearBatchedEvents()
+
+        // Update in-memory queue
+        batchedEvents = mutableListOf()
     }
 
     private suspend inline fun <reified T> HttpClient.postCatching(
