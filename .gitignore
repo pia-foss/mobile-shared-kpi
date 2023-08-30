@@ -43,5 +43,5 @@ dist
 apple_dist
 Preview.html
 Gemfile.lock
-kpi.podspec
-
+*.podspec
+*.xcframework
