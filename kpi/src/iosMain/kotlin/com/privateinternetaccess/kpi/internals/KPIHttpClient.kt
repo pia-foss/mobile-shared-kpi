@@ -38,7 +38,7 @@ internal actual object KPIHttpClient {
         certificate: String?,
         pinnedEndpoint: Pair<String, String>?,
         requestTimeoutMs: Long
-    ) = HttpClient(Ios) {
+    ) = HttpClient(Darwin) {
         expectSuccess = false
         install(HttpTimeout) {
             requestTimeoutMillis = requestTimeoutMs
