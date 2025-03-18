@@ -23,6 +23,7 @@ ovpnlibs
 .project
 .settings
 .classpath
+.kotlin
 project.properties
 *.apk
 
