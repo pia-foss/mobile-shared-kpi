@@ -38,7 +38,7 @@ android {
 @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
 kotlin {
     group = "com.kape.android"
-    version = "1.2.4"
+    version = "1.2.5"
 
     jvmToolchain(17)
 
