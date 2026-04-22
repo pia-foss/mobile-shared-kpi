@@ -91,8 +91,8 @@ internal class KPIPersistencyImpl internal constructor(
 
         // Update sample events.
         val recentEvents = sampleEvents().toMutableList()
-        if (recentEvents.size > eventHistorySize) {
-            recentEvents.removeFirst()
+        if (recentEvents.size > eventHistorySize && recentEvents.isNotEmpty()) {
+            recentEvents.removeAt(0)
         }
         recentEvents.add(event)
         val jsonString = json.encodeToString(

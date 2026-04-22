@@ -372,8 +372,8 @@ internal class KPI(
 
         // Update sample events. If we have more than the max of sample events supported.
         // Clear the oldest one before adding the new one.
-        if (sampleEvents.size >= eventsHistorySize) {
-            sampleEvents.removeFirst()
+        if (sampleEvents.size >= eventsHistorySize && sampleEvents.isNotEmpty()) {
+            sampleEvents.removeAt(0)
         }
         sampleEvents.add(event)
     }
